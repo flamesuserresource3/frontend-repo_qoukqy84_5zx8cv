@@ -1,6 +1,5 @@
 import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
 
-// Types
 // Task: { id: string, title: string, description?: string, estimate: number, status: 'Pending'|'In Progress'|'Completed', completedSessions: number }
 // Session Log: { id: string, taskId?: string, type: 'work'|'short'|'long', start: number, end: number }
 
@@ -48,22 +47,37 @@ function useLocalStorageState(key, initialValue) {
   return [state, setState];
 }
 
+function applyDarkClass(enabled) {
+  const root = document.documentElement;
+  const body = document.body;
+  const appRoot = document.getElementById('root');
+  [root, body, appRoot].forEach((el) => {
+    if (!el) return;
+    if (enabled) el.classList.add('dark');
+    else el.classList.remove('dark');
+  });
+}
+
 export function AppProvider({ children }) {
+  // Prefer system theme if no stored preference
+  const prefersDark = typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+  const defaultUi = { darkMode: prefersDark, showSettings: false, showEndPrompt: false };
+
   // Tasks and sessions
   const [tasks, setTasks] = useLocalStorageState(STORAGE_KEYS.tasks, []);
   const [sessions, setSessions] = useLocalStorageState(STORAGE_KEYS.sessions, []);
   const [settings, setSettings] = useLocalStorageState(STORAGE_KEYS.settings, defaultSettings);
-  const [ui, setUi] = useLocalStorageState(STORAGE_KEYS.ui, { darkMode: false, showSettings: false, showEndPrompt: false });
+  const [ui, setUi] = useLocalStorageState(STORAGE_KEYS.ui, defaultUi);
 
   // Timer state persisted
   const [timer, setTimer] = useLocalStorageState(STORAGE_KEYS.timer, {
-    mode: 'work', // 'work'|'short'|'long'
+    mode: 'work',
     isRunning: false,
     isPaused: false,
-    endTime: null, // epoch ms
-    remaining: 0, // seconds
+    endTime: null,
+    remaining: 0,
     currentTaskId: null,
-    cycleCount: 0, // completed work sessions in current cycle
+    cycleCount: 0,
     lastStart: null,
   });
 
@@ -71,8 +85,7 @@ export function AppProvider({ children }) {
 
   // Dark mode effect
   useEffect(() => {
-    if (ui.darkMode) document.documentElement.classList.add('dark');
-    else document.documentElement.classList.remove('dark');
+    applyDarkClass(!!ui.darkMode);
   }, [ui.darkMode]);
 
   // Recompute remaining based on endTime
@@ -148,7 +161,6 @@ export function AppProvider({ children }) {
     const duration = getModeDurationSec('work');
     const endTime = Date.now() + duration * 1000;
     setTimer({ mode: 'work', isRunning: true, isPaused: false, endTime, remaining: duration, currentTaskId: taskId, cycleCount: timer.cycleCount || 0, lastStart: Date.now() });
-    // Mark task in progress if pending
     setTasks((prev) => prev.map((t) => (t.id === taskId && t.status === 'Pending' ? { ...t, status: 'In Progress' } : t)));
   };
 
@@ -174,10 +186,8 @@ export function AppProvider({ children }) {
   };
 
   const completeWorkSession = () => {
-    // Log session
     const log = { id: uid(), taskId: timer.currentTaskId, type: 'work', start: timer.lastStart || Date.now(), end: Date.now() };
     setSessions((prev) => [log, ...prev]);
-    // Update task progress
     if (timer.currentTaskId) {
       setTasks((prev) => prev.map((t) => (t.id === timer.currentTaskId ? { ...t, completedSessions: (t.completedSessions || 0) + 1, status: (t.completedSessions + 1) >= t.estimate ? 'Completed' : t.status } : t)));
     }
@@ -191,13 +201,9 @@ export function AppProvider({ children }) {
       const nextIsLong = ((timer.cycleCount + 1) % Math.max(1, settings.longBreakEvery)) === 0;
       setTimer((t) => ({ ...t, isRunning: false, isPaused: false }));
       setUi((u) => ({ ...u, showEndPrompt: true }));
-      // Auto-switch prepared but wait for prompt action
-      // We store the intended next mode in ui for the prompt handler
       setUi((u) => ({ ...u, intendedNextMode: nextIsLong ? 'long' : 'short' }));
     } else {
-      // Break ended -> go to work
       const nextMode = 'work';
-      // If long break finished, reset cycle count
       const resetCycle = timer.mode === 'long';
       setTimer((t) => ({ ...t, cycleCount: resetCycle ? 0 : t.cycleCount, currentTaskId: t.currentTaskId }));
       switchMode(nextMode);
